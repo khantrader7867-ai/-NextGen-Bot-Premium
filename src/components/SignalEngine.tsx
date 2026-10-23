@@ -813,6 +813,18 @@ export const SignalEngine: React.FC<SignalEngineProps> = ({
           </div>
         </div>
       </div>
+
+      {/* YouTube Video Tutorial Button */}
+      <div className="mt-8">
+        <a
+          href="https://youtu.be/4x9XaO8chmk?si=f2qG0I6uonUjy6WF"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="w-full py-4 px-6 rounded-2xl bg-gradient-to-r from-red-600 via-rose-600 to-amber-600 hover:from-red-500 hover:via-rose-500 hover:to-amber-500 text-white font-black text-sm sm:text-base tracking-wider flex items-center justify-center gap-2.5 transition-all duration-300 shadow-[0_0_25px_rgba(225,29,72,0.35)] border border-rose-400/40 transform hover:scale-[1.01] active:scale-[0.99] cursor-pointer"
+        >
+          <span>▶ HOW TO USE NEXTGEN BOT PREMIUM</span>
+        </a>
+      </div>
     </div>
   );
 };
