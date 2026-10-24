@@ -17,7 +17,8 @@ import {
   Award,
   Lock,
   Radio,
-  Cpu
+  Cpu,
+  AlertTriangle
 } from 'lucide-react';
 import { CurrencyPair, Language, MarketType, SignalData } from '../types';
 import { translations, QUOTEX_REFERRAL_URL } from '../constants/translations';
@@ -72,6 +73,12 @@ export const SignalEngine: React.FC<SignalEngineProps> = ({
   const availablePairs = market === 'otc' ? OTC_PAIRS : LIVE_PAIRS;
   const availableTimeframes = market === 'otc' ? OTC_TIMEFRAMES : LIVE_TIMEFRAMES;
 
+  // Weekend check: Live Forex markets are closed on Saturday (6) and Sunday (0)
+  const isWeekend = React.useMemo(() => {
+    const day = new Date().getDay();
+    return day === 0 || day === 6;
+  }, []);
+
   const [selectedPair, setSelectedPair] = useState<CurrencyPair>(availablePairs[0]);
   const [selectedTimeframe, setSelectedTimeframe] = useState(availableTimeframes[3] || availableTimeframes[0]);
 
@@ -81,7 +88,10 @@ export const SignalEngine: React.FC<SignalEngineProps> = ({
     const timeframes = market === 'otc' ? OTC_TIMEFRAMES : LIVE_TIMEFRAMES;
     setSelectedPair(pairs[0]);
     setSelectedTimeframe(market === 'otc' ? timeframes[3] : timeframes[0]);
-  }, [market]);
+    if (market === 'live' && isWeekend) {
+      setCurrentSignal(null);
+    }
+  }, [market, isWeekend]);
 
   // Active Users live fluctuation
   const [activeUsers, setActiveUsers] = useState<number>(1429);
@@ -269,23 +279,66 @@ export const SignalEngine: React.FC<SignalEngineProps> = ({
     return () => clearInterval(interval);
   }, [currentSignal?.id, currentSignal?.remainingSeconds, selectedPair.payout]);
 
-  // Fluctuating confidence accuracy when viewing signal (e.g. 87%, 91%, 96%)
+  // Fluctuating confidence accuracy when viewing signal (strictly >= 85%)
   useEffect(() => {
     if (!currentSignal || currentSignal.remainingSeconds <= 0) return;
     const interval = setInterval(() => {
       setCurrentSignal((prev) => {
         if (!prev || prev.remainingSeconds <= 0) return prev;
         const delta = (Math.random() - 0.5) * 0.4;
-        const bounded = Math.min(96.8, Math.max(86.5, Number((prev.accuracy + delta).toFixed(1))));
+        const bounded = Math.min(97.2, Math.max(85.0, Number((prev.accuracy + delta).toFixed(1))));
         return { ...prev, accuracy: bounded };
       });
     }, 1100);
     return () => clearInterval(interval);
   }, [currentSignal?.id]);
 
+  // High-accuracy AI Text-to-Speech voice announcement
+  const speakSignalAnnouncement = (marketName: string, timeframeName: string, direction: 'CALL' | 'PUT', accuracy: number) => {
+    try {
+      if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
+        console.warn('SpeechSynthesis API not available');
+        return;
+      }
+
+      window.speechSynthesis.cancel();
+
+      // Announcement Format: "[Market Name], next [Timeframe], [Call/Buy or Put/Sell], my accuracy according to analysis is [Accuracy]%."
+      const action = direction === 'CALL' ? 'Call Buy' : 'Put Sell';
+      const textToAnnounce = `${marketName}, next ${timeframeName}, ${action}, my accuracy according to analysis is ${accuracy}%.`;
+
+      const utterance = new SpeechSynthesisUtterance(textToAnnounce);
+      utterance.lang = 'en-US';
+      utterance.rate = 0.95;
+      utterance.pitch = 1.0;
+      utterance.volume = 1.0;
+
+      const voices = window.speechSynthesis.getVoices();
+      if (voices && voices.length > 0) {
+        const preferredVoice = voices.find(
+          (v) => (v.name.includes('Google') || v.name.includes('Natural') || v.name.includes('Samantha') || v.name.includes('David') || v.name.includes('Jenny') || v.name.includes('Guy')) && v.lang.startsWith('en')
+        ) || voices.find((v) => v.lang.startsWith('en'));
+
+        if (preferredVoice) {
+          utterance.voice = preferredVoice;
+        }
+      }
+
+      window.speechSynthesis.speak(utterance);
+    } catch (err) {
+      console.warn('Text-to-Speech voice error:', err);
+    }
+  };
+
   // Handler: "Get Real Signal" with realistic 5 to 10-second multi-step sequence
   const handleGenerateSignal = () => {
     if (isAnalyzing) return;
+
+    // Live Market Weekend Guard: Do not generate signals on Saturday or Sunday
+    if (market === 'live' && isWeekend) {
+      return;
+    }
+
     setIsAnalyzing(true);
     setAnalysisProgress(10);
     playTone('scanner');
@@ -309,15 +362,19 @@ export const SignalEngine: React.FC<SignalEngineProps> = ({
     // Complete at ~7.2 seconds (within 5-10 second requirement)
     setTimeout(() => {
       const direction: 'CALL' | 'PUT' = Math.random() > 0.48 ? 'CALL' : 'PUT';
-      // Accuracy fluctuates realistically between 87% and 96%
-      const baseAccuracy = Number((87.5 + Math.random() * 8.8).toFixed(1));
+      // Accuracy Rule: Strictly 85% or higher (never below 85%)
+      const baseAccuracy = Math.max(85.0, Number((88.0 + Math.random() * 8.5).toFixed(1)));
+
+      // Dynamic UI Reading: Read active market pair and timeframe directly from current state
+      const activeMarketName = selectedPair.name;
+      const activeTimeframeName = selectedTimeframe.name;
 
       const newSig: SignalData = {
         id: `sig_${Date.now()}`,
-        pair: selectedPair.name,
+        pair: activeMarketName,
         flags: selectedPair.flags,
         market,
-        timeframe: selectedTimeframe.name,
+        timeframe: activeTimeframeName,
         direction,
         accuracy: baseAccuracy,
         entryPrice: selectedPair.basePrice,
@@ -335,6 +392,9 @@ export const SignalEngine: React.FC<SignalEngineProps> = ({
       setCurrentSignal(newSig);
       setIsAnalyzing(false);
       playTone('chime');
+
+      // Trigger voice announcement automatically the exact moment signal is generated
+      speakSignalAnnouncement(activeMarketName, activeTimeframeName, direction, baseAccuracy);
     }, 7200);
   };
 
@@ -459,9 +519,29 @@ export const SignalEngine: React.FC<SignalEngineProps> = ({
                 }`}
               >
                 <span className="tracking-wide">🌐 Live Market</span>
-                <span className="text-[11px] text-cyan-300 font-black tracking-wide">Real Forex Liquidity</span>
+                <span className="text-[11px] text-cyan-300 font-black tracking-wide">
+                  {isWeekend ? 'Closed on Weekends' : 'Real Forex Liquidity'}
+                </span>
               </button>
             </div>
+
+            {/* Clear Notification Banner when Live Market is selected on Weekends */}
+            {market === 'live' && isWeekend && (
+              <div className="mt-3 p-3.5 rounded-xl bg-amber-500/15 border border-amber-500/40 text-amber-200 text-xs flex items-start gap-2.5 shadow-lg">
+                <AlertTriangle className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="font-black text-amber-300 text-sm">Today Market Closed</span>
+                    <span className="px-2 py-0.5 rounded text-[10px] font-mono font-black uppercase bg-amber-500/20 text-amber-300 border border-amber-500/40">Weekend</span>
+                  </div>
+                  <p className="font-bold text-slate-200 mt-1 leading-relaxed">
+                    {isUrdu
+                      ? 'ہفتہ اور اتوار کو لائیو فاریکس مارکیٹ بند رہتی ہے۔ سگنلز حاصل کرنے کے لیے برائے مہربانی او ٹی سی (OTC) مارکیٹ منتخب کریں۔'
+                      : 'Live Forex Market is closed on weekends (Saturday & Sunday). Please switch to OTC Market to generate 24/7 active signals.'}
+                  </p>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Asset Pairs Grid with Country/Currency Flags (Comprehensive list) */}
@@ -531,12 +611,21 @@ export const SignalEngine: React.FC<SignalEngineProps> = ({
             <button
               onClick={handleGenerateSignal}
               disabled={isAnalyzing}
-              className="w-full py-4 px-6 bg-gradient-to-r from-emerald-400 via-teal-400 to-cyan-400 hover:from-emerald-300 hover:via-teal-300 hover:to-cyan-300 text-slate-950 font-black text-base sm:text-lg rounded-2xl transition-all shadow-[0_0_30px_rgba(16,185,129,0.45)] flex items-center justify-center gap-3 transform active:scale-[0.99] disabled:opacity-75 disabled:cursor-not-allowed tracking-wide"
+              className={`w-full py-4 px-6 font-black text-base sm:text-lg rounded-2xl transition-all flex items-center justify-center gap-3 transform active:scale-[0.99] disabled:opacity-75 disabled:cursor-not-allowed tracking-wide ${
+                market === 'live' && isWeekend
+                  ? 'bg-gradient-to-r from-amber-500/25 via-slate-900 to-amber-500/25 border border-amber-500/50 text-amber-300 shadow-[0_0_20px_rgba(245,158,11,0.25)] hover:border-amber-400'
+                  : 'bg-gradient-to-r from-emerald-400 via-teal-400 to-cyan-400 hover:from-emerald-300 hover:via-teal-300 hover:to-cyan-300 text-slate-950 shadow-[0_0_30px_rgba(16,185,129,0.45)]'
+              }`}
             >
               {isAnalyzing ? (
                 <>
                   <Activity className="w-5 h-5 animate-spin" />
                   <span className="truncate">{analysisStep}</span>
+                </>
+              ) : market === 'live' && isWeekend ? (
+                <>
+                  <AlertTriangle className="w-6 h-6 text-amber-400" />
+                  <span>Today Market Closed</span>
                 </>
               ) : (
                 <>
@@ -561,8 +650,37 @@ export const SignalEngine: React.FC<SignalEngineProps> = ({
 
         {/* Right Column: Signal Output & Synchronized Candlestick Chart Engine */}
         <div className="lg:col-span-7 space-y-5">
+          {/* Live Market Closed on Weekends Hero Notification */}
+          {market === 'live' && isWeekend && (
+            <div className="bg-[#0b1322]/95 border border-amber-500/50 rounded-2xl p-6 text-center relative overflow-hidden shadow-2xl backdrop-blur-md">
+              <div className="absolute inset-0 bg-gradient-to-r from-amber-500/10 via-amber-400/5 to-amber-500/10" />
+              <div className="relative z-10 py-4">
+                <div className="w-16 h-16 mx-auto mb-3.5 rounded-2xl bg-amber-500/15 border border-amber-400/40 flex items-center justify-center text-amber-400 shadow-[0_0_25px_rgba(245,158,11,0.3)]">
+                  <Clock className="w-8 h-8 text-amber-400" />
+                </div>
+                <h3 className="text-xl sm:text-2xl font-black text-white mb-2 tracking-wide drop-shadow-sm flex items-center justify-center gap-2">
+                  <span className="text-amber-400">⚠️</span>
+                  <span>Today Market Closed</span>
+                </h3>
+                <p className="text-xs sm:text-sm text-slate-200 max-w-md mx-auto mb-5 font-bold leading-relaxed">
+                  {isUrdu
+                    ? 'لائیو فاریکس مارکیٹ ہفتہ اور اتوار کو بند رہتی ہے۔ ریئل انٹر بینک لیکویڈیٹی پیر کے روز دوبارہ بحال ہوگی۔ 24/7 ایکٹو سگنلز حاصل کرنے کے لیے او ٹی سی (OTC) مارکیٹ پر سوئچ کریں۔'
+                    : 'Live Forex Market is closed on weekends (Saturday & Sunday). Real interbank liquidity resumes on Monday. Switch to OTC Market for 24/7 high-accuracy trading signals.'}
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setMarket('otc')}
+                  className="px-6 py-3 rounded-xl bg-gradient-to-r from-emerald-400 to-teal-400 hover:from-emerald-300 hover:to-teal-300 text-slate-950 font-black text-sm transition-all shadow-[0_0_20px_rgba(16,185,129,0.35)] inline-flex items-center gap-2 tracking-wide cursor-pointer"
+                >
+                  <Zap className="w-4 h-4 fill-current" />
+                  <span>⚡ Switch to OTC Market (24/7 Active)</span>
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* Signal Output Display Card */}
-          {isAnalyzing && (
+          {!(market === 'live' && isWeekend) && isAnalyzing && (
             <div className="bg-[#0b1322]/95 border border-emerald-500/50 rounded-2xl p-6 text-center relative overflow-hidden shadow-2xl">
               <div className="absolute inset-0 bg-gradient-to-r from-emerald-500/10 via-cyan-500/10 to-emerald-500/10 animate-pulse" />
               <div className="relative z-10 py-5">
@@ -588,7 +706,7 @@ export const SignalEngine: React.FC<SignalEngineProps> = ({
             </div>
           )}
 
-          {currentSignal && !isAnalyzing && (
+          {!(market === 'live' && isWeekend) && currentSignal && !isAnalyzing && (
             <div
               className={`rounded-2xl p-6 border transition-all relative overflow-hidden backdrop-blur-md shadow-2xl ${
                 currentSignal.direction === 'CALL'
@@ -605,9 +723,19 @@ export const SignalEngine: React.FC<SignalEngineProps> = ({
                     {currentSignal.timeframe}
                   </span>
                 </div>
-                <div className="flex items-center gap-1.5 text-xs text-emerald-400 font-black font-mono">
-                  <Clock className="w-4 h-4 text-emerald-400" />
-                  <span>Real AI Signal Active</span>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => speakSignalAnnouncement(currentSignal.pair, currentSignal.timeframe, currentSignal.direction, currentSignal.accuracy)}
+                    title="Replay Voice Announcement"
+                    className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700/80 text-cyan-300 hover:text-white transition-all text-xs font-bold shadow-sm"
+                  >
+                    <Volume2 className="w-3.5 h-3.5 text-cyan-400" />
+                    <span>Replay Voice</span>
+                  </button>
+                  <div className="flex items-center gap-1.5 text-xs text-emerald-400 font-black font-mono">
+                    <Clock className="w-4 h-4 text-emerald-400" />
+                    <span>Real AI Signal Active</span>
+                  </div>
                 </div>
               </div>
 
@@ -817,7 +945,7 @@ export const SignalEngine: React.FC<SignalEngineProps> = ({
       {/* YouTube Video Tutorial Button */}
       <div className="mt-8">
         <a
-          href="https://youtu.be/4x9XaO8chmk?si=f2qG0I6uonUjy6WF"
+          href="https://youtu.be/fkB1sNJmBlg"
           target="_blank"
           rel="noopener noreferrer"
           className="w-full py-4 px-6 rounded-2xl bg-gradient-to-r from-red-600 via-rose-600 to-amber-600 hover:from-red-500 hover:via-rose-500 hover:to-amber-500 text-white font-black text-sm sm:text-base tracking-wider flex items-center justify-center gap-2.5 transition-all duration-300 shadow-[0_0_25px_rgba(225,29,72,0.35)] border border-rose-400/40 transform hover:scale-[1.01] active:scale-[0.99] cursor-pointer"
